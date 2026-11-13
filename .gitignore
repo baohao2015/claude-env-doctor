@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+reports/
+/report*.html
+/report*.json
+*.local.json
+.DS_Store
