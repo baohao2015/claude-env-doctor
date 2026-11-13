@@ -72,7 +72,7 @@ Windows 使用 `python` 替代 `python3`。本地系统代理、DNS、隧道接�
 3. **代理遵循当前官方文档。** 优先顺序为 `https_proxy`、`HTTPS_PROXY`、`http_proxy`、`HTTP_PROXY`；不把 SOCKS 或仅设置 ALL_PROXY 当成受支持的 Claude Code 代理。NO_PROXY 支持主机名、域名后缀、IP/CIDR、逗号或空格分隔以及 `*`；复杂通配符、带端口和大小写值冲突会跳过网络探测。具体运行时的实现可能不同。
 4. **探针使用 curl，未复刻 Claude 网络栈。** 不读取 `.curlrc`/`.netrc`，不跟随重定向，不继承 curl 自己的代理和证书变量。代理凭据通过标准输入交给 curl，不进入参数列表或报告。TLS 总是校验；配置 `NODE_EXTRA_CA_CERTS` 时会使用该 CA 文件，但 curl 与 Claude 的信任库合并方式可能不同。
 5. **显式代理模式不另开直连 IPv6 探针。** 避免为了检测而制造额外直连路径。NO_PROXY 的有意绕行会单独报告；无显式代理时，系统路由可能已经由 TUN/VPN 接管。
-6. **自定义 API 也只探测连通性。** 使用候选 `ANTHROPIC_BASE_URL` 的 `/v1/models`（已经以 `/v1` 结尾则追加 `/models`），发送无认证 HEAD 请求。远程明文 HTTP、带 query/fragment/内嵌凭据的 API URL 不会被探测。启用 Bedrock/Vertex/Foundry 模式时跳过 API 探测，不误测官方 API。自定义服务可能不支持这个路径或 HEAD，4xx 不能直接说明 Claude 的真实请求失败。
+6. **自定义 API 也只探测连通性。** 使用候选 `ANTHROPIC_BASE_URL` 的 `/v1/models`（已经以 `/v1` 结尾则追加 `/models`），发送无认证 GET 请求，不调用模型。远程明文 HTTP、带 query/fragment/内嵌凭据的 API URL 不会被探测。启用 Bedrock/Vertex/Foundry 模式时跳过 API 探测，不误测官方 API。自定义服务可能不支持这个路径，4xx 不能直接说明 Claude 的真实请求失败。
 7. **不做账号风控预测。** 不检查付款身份、设备标识、浏览器指纹，不扫描账号历史、Cookie、钥匙串或聊天内容；DNS 配置不等于实际 DNS 出口，WebRTC 未覆盖。遵循平台实际支持范围和服务规则；本地报告无法替代服务端判断。
 
 ## 联网与隐私
@@ -84,7 +84,7 @@ Windows 使用 `python` 替代 `python3`。本地系统代理、DNS、隧道接�
 | `https://www.cloudflare.com/cdn-cgi/trace` | GET，必要时另做 IPv6 GET | 当前探针出口 |
 | `https://claude.ai/` | HEAD | 网页路径连通性 |
 | `https://claude.ai/cdn-cgi/trace` | GET | Claude CDN 边缘出口（服务可能不开放） |
-| 官方或配置的 API Base URL | HEAD `/v1/models` | API 路径连通性 |
+| 官方或配置的 API Base URL | GET `/v1/models`（无认证，不调用模型） | API 路径连通性 |
 
 这些服务及你的代理会看到探针的出口 IP 和正常 HTTP/TLS 请求元数据。需要代理认证时，只有所选代理会收到该代理的凭据；**不发送 Claude API Key、OAuth token、Cookie、聊天、代码或设备 ID**。没有项目自建后端或遥测。
 

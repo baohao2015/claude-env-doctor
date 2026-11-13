@@ -187,6 +187,23 @@ class InterpretationTests(unittest.TestCase):
             doctor.inspect_network({}, set(), "http://localhost:8181", True, 1, checks)
         self.assertFalse(any(call.kwargs.get("ipv6") for call in probe.call_args_list))
 
+    def test_ipv6_ipv4_echo_is_unknown_and_not_used_for_ipv6_region_comparison(self):
+        def fake_probe(url, proxy, no_proxy, timeout, **kwargs):
+            country = "SG" if kwargs.get("ipv6") else "US"
+            return dict(code=0, http=200, trace={"ip": "203.0.113.7", "country": country}, route="system")
+        checks = []
+        with patch.object(doctor, "probe", side_effect=fake_probe), patch.object(shutil, "which", return_value="curl"):
+            doctor.inspect_network({}, set(), "", True, 1, checks)
+        self.assertEqual(next(c for c in checks if c["id"] == "ipv6")["status"], "unknown")
+        self.assertNotIn("ipv6.consistency", {c["id"] for c in checks})
+
+    def test_api_uses_get_instead_of_head(self):
+        checks = []
+        with patch.object(doctor, "probe", return_value=dict(code=0, http=401, trace={}, route="system")) as probe:
+            doctor.inspect_network({}, set(), "http://localhost:8181", True, 1, checks)
+        api_call = next(call for call in probe.call_args_list if call.args[0].endswith("/v1/models"))
+        self.assertEqual(api_call.kwargs["method"], "GET")
+
     def test_html_escapes_external_text_and_has_no_scripts(self):
         report = dict(generated_at="now", checks=[dict(status="warn", title="<script>alert(1)</script>",
                       evidence='<img src="https://example.com">', action="x & y")], limitations=[])
@@ -211,7 +228,11 @@ class TransportTests(unittest.TestCase):
 
         class Handler(BaseHTTPRequestHandler):
             def do_HEAD(self):
-                self.respond(False)
+                if self.path == "/get-only/v1/models":
+                    self.send_response(405)
+                    self.end_headers()
+                else:
+                    self.respond(False)
 
             def do_GET(self):
                 self.respond(True)
@@ -247,6 +268,13 @@ class TransportTests(unittest.TestCase):
     def test_api_401_and_web_403_are_distinct(self):
         self.assertEqual(doctor.classify(doctor.probe(self.url + "/v1/models", "", "", 2))[0], "info")
         self.assertEqual(doctor.classify(doctor.probe(self.url + "/forbidden", "", "", 2))[0], "warn")
+
+    def test_get_only_api_endpoint_can_be_diagnosed_without_credentials(self):
+        target = self.url + "/get-only/v1/models"
+        self.assertEqual(doctor.probe(target, "", "", 2)["http"], 405)
+        result = doctor.probe(target, "", "", 2, method="GET")
+        self.assertEqual(result["http"], 401)
+        self.assertEqual(doctor.classify(result)[0], "info")
 
     def test_redirect_is_not_followed(self):
         self.received.clear()

@@ -19,7 +19,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 PROXY_KEYS = ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY")
 NETWORK_KEYS = PROXY_KEYS + (
     "all_proxy", "ALL_PROXY", "no_proxy", "NO_PROXY", "ANTHROPIC_BASE_URL", "TZ",
@@ -297,7 +297,7 @@ def curl_quote(value):
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r") + '"'
 
 
-def probe(url, proxy, no_proxy, timeout, *, trace=False, ipv6=False, ca=None):
+def probe(url, proxy, no_proxy, timeout, *, trace=False, ipv6=False, ca=None, method="HEAD"):
     """No curlrc/netrc, redirects, cookies, auth headers, shell or inherited proxies."""
     parsed = parse_url(url)
     route = "" if no_proxy_matches(parsed.hostname, no_proxy) else proxy
@@ -305,7 +305,9 @@ def probe(url, proxy, no_proxy, timeout, *, trace=False, ipv6=False, ca=None):
                "connect-timeout = " + str(timeout), "max-time = " + str(timeout),
                "url = " + curl_quote(url), "proxy = " + curl_quote(route), 'noproxy = ""',
                "write-out = " + curl_quote("\n%{json}")]
-    if not trace:
+    if method not in ("HEAD", "GET"):
+        raise ValueError("探针只允许 HEAD 或 GET")
+    if not trace and method == "HEAD":
         options.append("head")
     if ipv6:
         options.append("ipv6")
@@ -422,7 +424,8 @@ def inspect_network(env, conflicts, proxy, route_known, timeout, checks):
         add(checks, "ipv6", "unknown", "IPv6 出口", "显式 HTTP 代理模式下不另开直连 IPv6 探针，以免改变网络路径")
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [(job, executor.submit(probe, job[2], proxy, no_proxy, timeout,
-                                        trace=job[3], ipv6=job[4], ca=ca)) for job in jobs]
+                                        trace=job[3], ipv6=job[4], ca=ca,
+                                        method="GET" if job[0] == "api" else "HEAD")) for job in jobs]
         results = {}
         for (key, title, _, is_trace, _), future in futures:
             result = future.result()
@@ -430,6 +433,8 @@ def inspect_network(env, conflicts, proxy, route_known, timeout, checks):
             status, message = classify(result)
             if key == "ipv6" and (result["code"] or not result["trace"]):
                 status, message = "unknown", "IPv6 探测未完成；不能据此确认已关闭或没有泄漏"
+            elif key == "ipv6" and ipaddress.ip_address(result["trace"]["ip"]).version != 6:
+                status, message = "unknown", "指定 IPv6 探测但回显为 IPv4；可能存在网关转换，IPv6 出口未验证"
             elif is_trace and result["code"] == 0 and result["http"] == 200 and not result["trace"]:
                 status, message = "unknown", "收到响应但不是有效 trace；出口未确认"
             if result["trace"]:
@@ -444,6 +449,8 @@ def inspect_network(env, conflicts, proxy, route_known, timeout, checks):
             "两处出口 IP 相同" if same else "两处出口 IP 不同；可能是分流、双栈或负载均衡",
             "不同不自动等于泄漏；核对代理规则和预期线路。")
     ipv6_trace = results.get("ipv6", {}).get("trace", {})
+    if ipv6_trace and ipaddress.ip_address(ipv6_trace["ip"]).version != 6:
+        ipv6_trace = {}
     if first.get("country") and ipv6_trace.get("country") and first["country"] != ipv6_trace["country"]:
         add(checks, "ipv6.consistency", "warn", "IPv4/默认路径与 IPv6 地区不同",
             f"默认路径 {first['country']}；IPv6 {ipv6_trace['country']}",
